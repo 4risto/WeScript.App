@@ -1,0 +1,96 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using SharpDX;
+using SharpDX.Direct3D9;
+using SharpDX.Mathematics;
+using SharpDX.XInput;
+using WeScriptWrapper;
+using WeScript.SDK.UI;
+using WeScript.SDK.UI.Components;
+using WeScript.SDK.Utils;
+
+namespace exempleAristo
+{
+    class Program
+    {
+
+        public static IntPtr ac_ModuleBase = IntPtr.Zero;
+        public static IntPtr processHandle = IntPtr.Zero; //processHandle variable used by OpenProcess (once)
+        public static bool gameProcessExists = false; //avoid drawing if the game process is dead, or not existent
+        public static bool isWow64Process = false; //we all know the game is 32bit, but anyway...
+        public static bool isGameOnTop = false; //we should avoid drawing while the game is not set on top
+        public static bool isOverlayOnTop = false; //we might allow drawing visuals, while the user is working with the "menu"
+        public static uint PROCESS_ALL_ACCESS = 0x1FFFFF; //hardcoded access right to OpenProcess
+        static void Main(string[] args)
+        {
+            Memory.OnTick += OnTick; //Accessing game memory
+            Renderer.OnRenderer += OnRenderer; //HACKS
+        }
+
+        public static IntPtr Ammor_Ptr
+        {
+            get
+            {
+                return Memory.ReadPointer(processHandle, (IntPtr)(ac_ModuleBase.ToInt64() + 0x10F4F4), isWow64Process);
+            }
+        }
+
+        public static int Ammor
+        {
+            set
+            {
+                Memory.WriteInt32(processHandle, (IntPtr)Ammor_Ptr.ToInt64() + 0x150, value);
+            }
+        }
+
+        private static void OnTick(int counter, EventArgs args)
+        {
+            if (processHandle == IntPtr.Zero) //if we still don't have a handle to the process
+            {
+                var wndHnd = Memory.FindWindowName("AssaultCube"); //try finding the window of the process (check if it's spawned and loaded)
+                if (wndHnd != IntPtr.Zero) //if it exists
+                {
+                    var calcPid = Memory.GetPIDFromHWND(wndHnd); //get the PID of that same process
+                    if (calcPid > 0) //if we got the PID
+                    {
+                        processHandle = Memory.OpenProcess(PROCESS_ALL_ACCESS, calcPid); //get full access to the process so we can use it later
+                        if (processHandle != IntPtr.Zero)
+                        {
+                            //if we got access to the game, check if it's x64 bit, this is needed when reading pointers, since their size is 4 for x86 and 8 for x64
+                            isWow64Process = Memory.IsProcess64Bit(processHandle);
+                            //here you can scan for signatures and stuff, it happens only once on "attach"
+                        }
+                    }
+                }
+            }
+            else //else we have a handle, lets check if we should close it, or use it
+            {
+                var wndHnd = Memory.FindWindowName("AssaultCube");
+                if (wndHnd != IntPtr.Zero) //window still exists, so handle should be valid? let's keep using it
+                {
+                    //the lines of code below execute every 33ms outside of the renderer thread, heavy code can be put here if it's not render dependant
+                    gameProcessExists = true;
+                    isOverlayOnTop = Overlay.IsOnTop();
+                    ac_ModuleBase = Memory.GetModule(processHandle, "ac_client.exe");
+                }
+                else //else most likely the process is dead, clean up
+                {
+                    Memory.CloseHandle(processHandle); //close the handle to avoid leaks
+                    processHandle = IntPtr.Zero; //set it like this just in case for C# logic
+                    gameProcessExists = false;
+                }
+            }
+        }
+
+        private static void OnRenderer(int fps, EventArgs args)
+        {
+            if (!gameProcessExists) return; //process is dead, don't bother drawing
+            if ((!isGameOnTop) && (!isOverlayOnTop)) return; //if game and overlay are not on top, don't draw
+
+            Ammor = 500;
+        }
+    }
+}
